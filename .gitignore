@@ -1,0 +1,93 @@
+# .gitignore for Carbon Calculator Streamlit App
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.production
+.secrets.toml
+
+# Streamlit
+.streamlit/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+*.db
+
+# Local development
+uploads/
+*.csv
+*.xlsx
+*.json
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Image files
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Compression
+*.gz
+*.bz2
+*.zip
+*.7z
+
+# Temporary files
+*.tmp
+*.temp
+
+# Custom
+api_keys.txt
+sensitive_data/
