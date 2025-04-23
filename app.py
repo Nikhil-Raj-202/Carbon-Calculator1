@@ -3,8 +3,12 @@ import pandas as pd
 import time
 from datetime import datetime
 import random
-import openai
 import os
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Define emission factors (example values, replace with accurate data)
 EMISSION_FACTORS = {
@@ -149,21 +153,28 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize OpenAI API
-def init_openai_api():
-    # You should store your API key securely, preferably as an environment variable
-    api_key = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else os.environ.get("OPENAI_API_KEY")
+# Initialize OpenAI client
+def init_openai_client():
+    # Get API key from secrets or environment variables
+    api_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
     
     if not api_key:
         st.sidebar.warning("OpenAI API key not found. Please set it in your environment variables or Streamlit secrets.")
-        return False
+        return None
     
-    openai.api_key = api_key
-    return True
+    try:
+        client = OpenAI(api_key=api_key)
+        return client
+    except Exception as e:
+        st.sidebar.error(f"Error initializing OpenAI client: {e}")
+        return None
 
 # Function to get AI response
-def get_ai_response(messages, user_data=None):
+def get_ai_response(client, messages, user_data=None):
     try:
+        if not client:
+            return "I'm having trouble connecting to my knowledge base right now. Let me share some general tips about carbon footprints instead. To reduce your carbon footprint, consider using public transportation, reducing meat consumption, and minimizing energy usage at home."
+        
         # Create system message with context about carbon footprint
         system_message = {
             "role": "system",
@@ -195,16 +206,16 @@ def get_ai_response(messages, user_data=None):
                 "role": msg["role"],
                 "content": msg["content"]
             })
-            
-        # Call OpenAI API
-        response = openai.ChatCompletion.create(
+        
+        # Call OpenAI API with new client format
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=formatted_messages,
             max_tokens=500,
             temperature=0.7
         )
         
-        return response.choices[0].message["content"]
+        return response.choices[0].message.content
     
     except Exception as e:
         st.error(f"Error getting AI response: {str(e)}")
@@ -233,8 +244,12 @@ if 'highest_category' not in st.session_state:
     st.session_state.highest_category = ""
 if 'country' not in st.session_state:
     st.session_state.country = "India"  # Default country
-if 'api_initialized' not in st.session_state:
-    st.session_state.api_initialized = init_openai_api()
+if 'openai_client' not in st.session_state:
+    st.session_state.openai_client = init_openai_client()
+if 'user_input' not in st.session_state:
+    st.session_state.user_input = ""
+if 'should_rerun' not in st.session_state:
+    st.session_state.should_rerun = False
 
 # Streamlit app code
 st.markdown("<h1 class='main-header'>🌍 Personal Carbon Calculator</h1>", unsafe_allow_html=True)
@@ -346,7 +361,7 @@ with tab1:
             }
             
             # Generate AI message about results
-            if st.session_state.api_initialized:
+            if st.session_state.openai_client:
                 result_message = f"I've analyzed your carbon footprint data. Your total emissions are {total_emissions} tonnes CO2/year, "
                 if total_emissions > GLOBAL_AVERAGE_EMISSIONS[country]:
                     result_message += f"which is above the {country} average of {GLOBAL_AVERAGE_EMISSIONS[country]} tonnes CO2/year. "
@@ -412,7 +427,7 @@ with tab2:
     st.markdown("<h2 class='sub-header'>Chat with Carbon Footprint Assistant</h2>", unsafe_allow_html=True)
     
     # Display API status
-    if not st.session_state.api_initialized:
+    if st.session_state.openai_client is None:
         st.warning("AI API not initialized. The assistant will provide basic responses only. Please set your API key in the environment variables or Streamlit secrets.")
     
     # Display chat messages
@@ -425,111 +440,121 @@ with tab2:
     st.markdown("</div>", unsafe_allow_html=True)
     
     # Chat input
-    user_input = st.text_input("Ask me about your carbon footprint or how to reduce it:", key="user_input")
+    def submit():
+        st.session_state.should_rerun = True
+    
+    user_input = st.text_input("Ask me about your carbon footprint or how to reduce it:", 
+                               key="chat_input", 
+                               on_change=submit)
     
     # Process user input
-    if user_input:
-        # Add user message to chat
-        st.session_state.messages.append({"role": "user", "content": user_input, "time": datetime.now().strftime("%H:%M")})
-        
-        # Prepare user data for AI context
-        user_data = {
-            "calculated": st.session_state.calculated,
-            "total_emissions": st.session_state.total_emissions,
-            "transportation_emissions": st.session_state.transportation_emissions,
-            "electricity_emissions": st.session_state.electricity_emissions,
-            "diet_emissions": st.session_state.diet_emissions,
-            "waste_emissions": st.session_state.waste_emissions,
-            "country": st.session_state.country,
-            "highest_category": st.session_state.highest_category
-        }
-        
-        # Generate AI response
-        if st.session_state.api_initialized:
-            with st.spinner("Thinking..."):
-                response = get_ai_response(st.session_state.messages, user_data)
-        else:
-            # Fallback to simple keyword-based responses if API is not available
-            user_input_lower = user_input.lower()
+    if st.session_state.should_rerun:
+        user_input = st.session_state.chat_input
+        if user_input:
+            # Add user message to chat
+            st.session_state.messages.append({"role": "user", "content": user_input, "time": datetime.now().strftime("%H:%M")})
             
-            if "transportation" in user_input_lower or "commute" in user_input_lower or "car" in user_input_lower:
-                if st.session_state.calculated:
-                    response = f"Your transportation emissions are {st.session_state.transportation_emissions} tonnes CO2/year. "
-                    response += "Here are some tips to reduce them:\n" + "\n".join([f"• {tip}" for tip in REDUCTION_TIPS["Transportation"][:3]])
-                else:
-                    response = "Transportation typically accounts for a significant portion of personal carbon emissions. " 
-                    response += "To reduce your impact, consider using public transit, carpooling, or cycling when possible."
+            # Prepare user data for AI context
+            user_data = {
+                "calculated": st.session_state.calculated,
+                "total_emissions": st.session_state.total_emissions,
+                "transportation_emissions": st.session_state.transportation_emissions,
+                "electricity_emissions": st.session_state.electricity_emissions,
+                "diet_emissions": st.session_state.diet_emissions,
+                "waste_emissions": st.session_state.waste_emissions,
+                "country": st.session_state.country,
+                "highest_category": st.session_state.highest_category
+            }
             
-            elif "electricity" in user_input_lower or "energy" in user_input_lower or "power" in user_input_lower:
-                if st.session_state.calculated:
-                    response = f"Your electricity emissions are {st.session_state.electricity_emissions} tonnes CO2/year. "
-                    response += "Here are some tips to reduce them:\n" + "\n".join([f"• {tip}" for tip in REDUCTION_TIPS["Electricity"][:3]])
-                else:
-                    response = "Electricity usage contributes significantly to your carbon footprint. "
-                    response += "Using energy-efficient appliances and being mindful of your consumption can help reduce emissions."
-            
-            elif "diet" in user_input_lower or "food" in user_input_lower or "eat" in user_input_lower:
-                if st.session_state.calculated:
-                    response = f"Your diet-related emissions are {st.session_state.diet_emissions} tonnes CO2/year. "
-                    response += "Here are some tips to reduce them:\n" + "\n".join([f"• {tip}" for tip in REDUCTION_TIPS["Diet"][:3]])
-                else:
-                    response = "Your dietary choices can have a significant impact on your carbon footprint. "
-                    response += "Plant-based diets generally have lower carbon emissions than meat-heavy diets."
-            
-            elif "waste" in user_input_lower or "trash" in user_input_lower or "garbage" in user_input_lower:
-                if st.session_state.calculated:
-                    response = f"Your waste-related emissions are {st.session_state.waste_emissions} tonnes CO2/year. "
-                    response += "Here are some tips to reduce them:\n" + "\n".join([f"• {tip}" for tip in REDUCTION_TIPS["Waste"][:3]])
-                else:
-                    response = "Waste management plays an important role in your overall carbon footprint. "
-                    response += "Recycling, composting, and reducing consumption all help minimize waste-related emissions."
-            
-            elif "total" in user_input_lower or "overall" in user_input_lower or "footprint" in user_input_lower:
-                if st.session_state.calculated:
-                    response = f"Your total carbon footprint is {st.session_state.total_emissions} tonnes CO2/year, "
-                    national_avg = GLOBAL_AVERAGE_EMISSIONS[st.session_state.country]
-                    if st.session_state.total_emissions > national_avg:
-                        response += f"which is {round((st.session_state.total_emissions/national_avg - 1) * 100, 1)}% higher than the {st.session_state.country} average of {national_avg} tonnes CO2/year."
-                    else:
-                        response += f"which is {round((1 - st.session_state.total_emissions/national_avg) * 100, 1)}% lower than the {st.session_state.country} average of {national_avg} tonnes CO2/year."
-                else:
-                    response = "To see your total carbon footprint, please go to the Calculator tab and enter your information."
-            
-            elif "tip" in user_input_lower or "help" in user_input_lower or "reduce" in user_input_lower:
-                response = "Here are some general tips to reduce your carbon footprint:\n"
-                for category, tips in REDUCTION_TIPS.items():
-                    response += f"\n{category}:\n• {tips[0]}\n• {tips[1]}"
-                    
-            elif "hi" in user_input_lower or "hello" in user_input_lower or "hey" in user_input_lower:
-                response = random.choice(AI_GREETINGS)
-                
-            elif "thank" in user_input_lower:
-                response = "You're welcome! I'm happy to help you understand and reduce your carbon footprint."
-                
+            # Generate AI response
+            if st.session_state.openai_client:
+                with st.spinner("Thinking..."):
+                    response = get_ai_response(st.session_state.openai_client, st.session_state.messages, user_data)
             else:
-                response = "I'm here to help you understand your carbon footprint and provide tips to reduce it. " 
-                response += "You can ask me about specific categories like transportation, electricity, diet, or waste, " 
-                response += "or ask for general reduction tips."
-        
-        # Add assistant response to chat
-        st.session_state.messages.append({"role": "assistant", "content": response, "time": datetime.now().strftime("%H:%M")})
-        
-        # Clear input box after processing
-        st.experimental_rerun()
+                # Fallback to simple keyword-based responses if API is not available
+                user_input_lower = user_input.lower()
+                
+                if "transportation" in user_input_lower or "commute" in user_input_lower or "car" in user_input_lower:
+                    if st.session_state.calculated:
+                        response = f"Your transportation emissions are {st.session_state.transportation_emissions} tonnes CO2/year. "
+                        response += "Here are some tips to reduce them:\n" + "\n".join([f"• {tip}" for tip in REDUCTION_TIPS["Transportation"][:3]])
+                    else:
+                        response = "Transportation typically accounts for a significant portion of personal carbon emissions. " 
+                        response += "To reduce your impact, consider using public transit, carpooling, or cycling when possible."
+                
+                elif "electricity" in user_input_lower or "energy" in user_input_lower or "power" in user_input_lower:
+                    if st.session_state.calculated:
+                        response = f"Your electricity emissions are {st.session_state.electricity_emissions} tonnes CO2/year. "
+                        response += "Here are some tips to reduce them:\n" + "\n".join([f"• {tip}" for tip in REDUCTION_TIPS["Electricity"][:3]])
+                    else:
+                        response = "Electricity usage contributes significantly to your carbon footprint. "
+                        response += "Using energy-efficient appliances and being mindful of your consumption can help reduce emissions."
+                
+                elif "diet" in user_input_lower or "food" in user_input_lower or "eat" in user_input_lower:
+                    if st.session_state.calculated:
+                        response = f"Your diet-related emissions are {st.session_state.diet_emissions} tonnes CO2/year. "
+                        response += "Here are some tips to reduce them:\n" + "\n".join([f"• {tip}" for tip in REDUCTION_TIPS["Diet"][:3]])
+                    else:
+                        response = "Your dietary choices can have a significant impact on your carbon footprint. "
+                        response += "Plant-based diets generally have lower carbon emissions than meat-heavy diets."
+                
+                elif "waste" in user_input_lower or "trash" in user_input_lower or "garbage" in user_input_lower:
+                    if st.session_state.calculated:
+                        response = f"Your waste-related emissions are {st.session_state.waste_emissions} tonnes CO2/year. "
+                        response += "Here are some tips to reduce them:\n" + "\n".join([f"• {tip}" for tip in REDUCTION_TIPS["Waste"][:3]])
+                    else:
+                        response = "Waste management plays an important role in your overall carbon footprint. "
+                        response += "Recycling, composting, and reducing consumption all help minimize waste-related emissions."
+                
+                elif "total" in user_input_lower or "overall" in user_input_lower or "footprint" in user_input_lower:
+                    if st.session_state.calculated:
+                        response = f"Your total carbon footprint is {st.session_state.total_emissions} tonnes CO2/year, "
+                        national_avg = GLOBAL_AVERAGE_EMISSIONS[st.session_state.country]
+                        if st.session_state.total_emissions > national_avg:
+                            response += f"which is {round((st.session_state.total_emissions/national_avg - 1) * 100, 1)}% higher than the {st.session_state.country} average of {national_avg} tonnes CO2/year."
+                        else:
+                            response += f"which is {round((1 - st.session_state.total_emissions/national_avg) * 100, 1)}% lower than the {st.session_state.country} average of {national_avg} tonnes CO2/year."
+                    else:
+                        response = "To see your total carbon footprint, please go to the Calculator tab and enter your information."
+                
+                elif "tip" in user_input_lower or "help" in user_input_lower or "reduce" in user_input_lower:
+                    response = "Here are some general tips to reduce your carbon footprint:\n"
+                    for category, tips in REDUCTION_TIPS.items():
+                        response += f"\n{category}:\n• {tips[0]}\n• {tips[1]}"
+                        
+                elif "hi" in user_input_lower or "hello" in user_input_lower or "hey" in user_input_lower:
+                    response = random.choice(AI_GREETINGS)
+                    
+                elif "thank" in user_input_lower:
+                    response = "You're welcome! I'm happy to help you understand and reduce your carbon footprint."
+                    
+                else:
+                    response = "I'm here to help you understand your carbon footprint and provide tips to reduce it. " 
+                    response += "You can ask me about specific categories like transportation, electricity, diet, or waste, " 
+                    response += "or ask for general reduction tips."
+            
+            # Add assistant response to chat
+            st.session_state.messages.append({"role": "assistant", "content": response, "time": datetime.now().strftime("%H:%M")})
+            
+            # Reset input and rerun flag
+            st.session_state.chat_input = ""
+            st.session_state.should_rerun = False
+            
+            # Use rerun to refresh the page and show the new messages
+            st.rerun()
 
 # Add API key input in sidebar
 with st.sidebar:
     st.subheader("API Settings")
-    api_key = st.text_input("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", type="password", key="api_key_input")
+    new_api_key = st.text_input("OpenAI API Key (Keep this secure)", type="password", key="sidebar_api_key")
     
     if st.button("Save API Key"):
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
-            openai.api_key = api_key
-            st.session_state.api_initialized = True
+        if new_api_key:
+            os.environ["OPENAI_API_KEY"] = new_api_key
+            st.session_state.openai_client = OpenAI(api_key=new_api_key)
             st.success("API key saved!")
         else:
-            st.error("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")
+            st.error("Please enter an API key")
 
 # Footer
 st.markdown("""
@@ -539,14 +564,4 @@ st.markdown("""
         The calculations use average emission factors and may not represent your exact emissions.</p>
         <p>Data sources: National emission factors based on 2021 data.</p>
     </div>
-""", unsafe_allow_html=True)
-
-# Auto-scroll to bottom of chat
-st.markdown("""
-    <script>
-        const chatContainer = document.getElementById('chat-container');
-        if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-    </script>
 """, unsafe_allow_html=True)
